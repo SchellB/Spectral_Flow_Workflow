@@ -21,7 +21,6 @@ BiocManager::install("flowCore")
 BiocManager::install("flowViz")
 BiocManager::install("flowVS")
 BiocManager::install("flowAI")
-BiocManager::install("flowAI")
 BiocManager::install("PeacoQC")
 BiocManager::install("CATALYST")
 BiocManager::install("SingleCellExperiment")
@@ -54,13 +53,13 @@ library(xlsx)
 ##Case A: Spectral flow cytometry dataset - ...
 
 ### Manual quality control and pregating of spectral flow cytometry data
-Before proceeding to automated analyses, several manual gating steps are required for quality control and cleaning of the data. Manually exclude doublets and dead cells. After, gate your population of interest and export it als FCS files. Save these FCS files in a new folder *FCS files* in your working directory.
+Before proceeding to automated analyses, several manual gating steps are required for quality control and cleaning of the data. Manually exclude doublets and dead cells. After, gate your population of interest and export it as FCS files. Save these FCS files in a new folder *FCS files* in your working directory.
 
 ### Importing spectral flowcytometry data
 The exported FCS 3.1 files can be stored in a folder *FCS files* and subsequently imported into the R environment with the FlowCore package. We will apply transformation of the data later, so transformation=FALSE. Furthermore, to prevent truncation of the data, truncate_max_range=FALSE. 
 
 ```{r Importing FCS files A}
-fcs.dir<- file.path(getwd(), "FCS files")
+fcs.dir<- "C:/Users/beren/Documents/CMF-pipeline/FCS_NKact"
 
 fcs_data <- read.flowSet(path=fcs.dir, pattern="*.fcs", transformation = FALSE, truncate_max_range = FALSE) #fcs_data will be a FlowSet object
 ```
@@ -69,17 +68,7 @@ Construct a data frame of your panel:
 
 ```{r Panel-A}
 
-fcs_colname <- colnames(fcs_data)
-marker_class <- rep("none", ncol(fcs_data[[1]]))
-marker_state <- 36
-marker_class[marker_state] <- "state" #markers that indicate "state" of a cell, such as PDL1 marker, or use it to indicate markers you won't use for clustering
-marker_type <- c(8:35,38)
-marker_class[marker_type] <- "type" # markers that indicate surface markers, such as CD3, CD4, or markers that you do want to use for clustering
-marker_class <- factor(marker_class, levels=c("type", "state", "none"))
-antigen <- pData(parameters(fcs_data[[1]]))$desc
-
-panel <- data.frame(fcs_colname, antigen, marker_class, row.names = NULL)
-write.xlsx(panel, file="panel_A.xlsx", sheetName="Panel_A")
+panel <- read.csv2("C:/Users/beren/Documents/CMF-pipeline/Data/panelNKact.csv", row.names = 1)
 
 ```
 
@@ -91,7 +80,8 @@ kable(panel)
 
 First, determine which markers you want to transform. You only have to transform the channels that you used for your experiment.
 ```{r Transforming data A-1}
-markerstotransform <- panel$fcs_colname[c(8:36,38)]
+library(dplyr)
+markerstotransform <- panel$channel[panel$marker_class=="type"]
 ```
 
 Before calculating cofactors with the FlowVS package, we will downsample our data. Including more cells in finding the optimum cofactor will come with a computational cost. Bartlett’s statistics (Y-axis) are computed from density peaks after data is transformed by different cofactors (X-axis). An optimum cofactor is obtained where Bartlett’s statistics is minimum (indicated by red circles). The estParamFlowVs function will show you the plots were it based its values on. It is advised to export your cofactor data as an csv or excel file, this is for reproducibility purposes.
@@ -110,14 +100,21 @@ Downsampling_FlowSet <- function(x, samplesize , replace=TRUE, prob=NULL){
 
 fcs_data_small <- Downsampling_FlowSet(x=fcs_data, samplesize = 2000) #samplesize is the number of cells included, you can include more cells.
 
+pdf(file="Output/cofactorTransform.pdf")
 cofactors <- estParamFlowVS(fcs_data_small, channels=markerstotransform)
+dev.off()
 cofactordata <- data.frame(markerstotransform, cofactors)
-write.csv(x=cofactordata, file="cofactordata.csv") #csv file
-write.xlsx(x=cofactordata, file="cofactordata.xlsx", sheet="cofactordata_A")
+write.csv2(x=cofactordata, file="Output/cofactordata.csv", row.names=F) #csv file
+
+cofactordata <- read.csv2("Output/cofactordata.csv")
 
 fcs_transform <- transFlowVS(fcs_data, channels = markerstotransform, cofactors)
 filenames <- sampleNames(fcs_data)
 sampleNames(fcs_transform) <- filenames
+
+fcs_transform_small <- transFlowVS(fcs_data_small, channels = markerstotransform, cofactors)
+filenames <- sampleNames(fcs_data_small)
+sampleNames(fcs_transform_small) <- filenames
 
 ```
 
@@ -131,14 +128,20 @@ cofactors<- rep(cofactor, l)
 fcs_transform <- transFlowVS(fcs_data, channels = markerstotransform, cofactors)
 filenames <- sampleNames(fcs_data)
 sampleNames(fcs_transform) <- filenames
+
+save(fcs_transform, fcs_transform_small, file="fcsTransformed.Rdata")
+load("fcsTransformed.Rdata")
 ```
 
 To evaluate the data transformation, you can visualize density plots of markers with the FlowViz package. 
 
 ```{r densityplots A}
-densityplot(~`FJComp-BUV496-A`, fcs_data[[1]]) #density plot before transformation, you can replace `FJComp-BUV496-A` by . to view all markers.
+pdf(file="Output/cofactorTransformPlots.pdf")
+densityplot(~., fcs_data[[1]]) #density plot before transformation, you can replace `FJComp-BB515-A` by . to view all markers.
 
-densityplot(~`FJComp-BUV496-A`, fcs_transform[[1]]) # density plot after transformation
+densityplot(~., fcs_transform[[1]]) # density plot after transformation
+dev.off()
+
 ``` 
 
 ### Automatic quality control of flow cytometry data 
@@ -146,12 +149,12 @@ Either flowAI or peacoQC package can be used to clean flow cytometry data. For C
 
 No pre-gated Time gate:
 ```{r FlowAI, eval=FALSE}
-fcs_transform <- flow_auto_qc(fcs_transform) 
+fcs_transform_small <- flow_auto_qc(fcs_transform_small) 
 ```
 
 Pre-gated Time gate:
 ```{r FlowAI not filtering time gate, results='hide', warning=FALSE}
-fcs_transform <- flow_auto_qc(fcs_transform, remove_from = "FS_FM") 
+fcs_transform_small <- flow_auto_qc(fcs_transform_small, remove_from = "FS_FM") 
 
 outdir <- file.path(getwd(), "Transformed FCS files") 
 filenames <- paste("tf",fcs_data@phenoData@data$name)
@@ -165,8 +168,8 @@ The next step is to correct batch effects, we will use the Cytonorm package to a
 fcs.dir<- file.path(getwd(), "Transformed FCS files")
 
 files <- list.files(fcs.dir, pattern = "fcs$")
-train_files <- file.path(getwd(),"Transformed FCS files", list.files(fcs.dir, pattern="REU271"))
-validation_files <- file.path(getwd(), "Transformed FCS files", list.files(fcs.dir, pattern="REU272"))
+train_files <- file.path(fcs.dir, list.files(fcs.dir, pattern="NK98198"))
+validation_files <- file.path(getwd(), "Transformed FCS files", list.files(fcs.dir, pattern="fcs$"))
 fsom <- prepareFlowSOM(train_files, colsToUse = markerstotransform, transformList = NULL, FlowSOM.params = list(xdim=10,ydim=10, nClus=20, scale=FALSE))
 ``` 
 
@@ -181,7 +184,8 @@ If the clusters are impacted by batch effects, CV values of >1.5/2 will occur, t
 Next, load a metadata file which includes at least a sample_id and a column defining the batches. You can include a column with filenames. 
 
 ```{r batch effect correction-3}
-md <-read.csv(file="md.csv", header=TRUE, sep=";")
+library(read)
+md <-read_excel("C:/Users/beren/Documents/CMF-pipeline/Data/metadataNKact.xlsx")
 ```
 
 ```{r batch effect correction-4, echo=FALSE}
@@ -190,14 +194,16 @@ kable(md)
 
 ```{r batch effect correction-5, results='hide', message=FALSE}
 fcs.dir<- file.path(getwd(), "Transformed FCS files")
-file_names <- list.files(fcs.dir)
+file_names <- list.files(fcs.dir, pattern = "fcs$")
+sort(file_names)
 file_name <- fsApply(fcs_transform, identifier)
+sort(file_name)
 
 file_name == file_names #check if the order of files in the directory and order of files in FlowSet object are matching
 
-md <- data.frame(file_name, md, row.names=NULL)
+md <- data.frame(sort(file_name), md, row.names=NULL)
 
-labels <- c("B", "C", "D", "E", "F", "A")
+labels <- c(seq(1:47)) # must be of same length than train files & then validation files
 
 
 model <- CytoNorm.train(files = train_files,
@@ -227,12 +233,16 @@ CytoNorm.normalize(model = model,
                    verbose = TRUE)
 
 fcs.dir<- file.path(getwd(), "Normalized")
-fcs_norm <- read.flowSet(path=fcs.dir, pattern="*.fcs", transformation = FALSE, truncate_max_range = FALSE)
+fcs_norm <- read.flowSet(path=fcs.dir, pattern="*Norm_tf", transformation = FALSE, truncate_max_range = FALSE)
 
 
-densityplot(~`FJComp-BUV496-A`, fcs_transform[13])#before normalization
 
-densityplot(~`FJComp-BUV496-A`, fcs_norm[3])#after normalization
+
+densityplot(~"FJComp-APC-Vio 770-A", fcs_transform[10])#before normalization
+
+densityplot(~., fcs_norm[13])#after normalization
+
+save(fcs_norm, file="fcsTransformedNorm.Rdata")
 ```
 
 At this point, you can take the FCS files from the Transformed files directory or Normalized FCS files directory and load these files into Cytosplore. More information about Cytosplore is available at: [https://www.cytosplore.org/]. You can skip arcsinh transformation for the data in Cytosplore.
